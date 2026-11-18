@@ -1,0 +1,8 @@
+{
+  "icon": "create_hypertube:hypertube",
+  "items": [
+    "create_hypertube:hypertube",
+    "create_hypertube:hypertube_entrance"
+  ],
+  "title": "itemGroup.create_hypertube"
+}

@@ -1,0 +1,18 @@
+{
+  "category": "misc",
+  "key": {
+    "C": "minecraft:hopper",
+    "F": "create_hypertube:hypertube",
+    "G": "minecraft:iron_ingot"
+  },
+  "pattern": [
+    " F ",
+    " G ",
+    " C "
+  ],
+  "result": {
+    "count": 1,
+    "id": "create_hypertube:hypertube_entrance"
+  },
+  "type": "minecraft:crafting_shaped"
+}

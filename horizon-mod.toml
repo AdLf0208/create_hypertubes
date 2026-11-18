@@ -1,0 +1,21 @@
+id = "create_hypertube"
+name = "Create: Hypertube"
+version = "0.2.0"
+description = """Ride through glass tubes between two entrances: a line of hypertubes joins along one axis, and an entrance pulls the player standing behind its mouth along the run at the original's minimum powered speed. Partial port: Create's kinetic network, the accelerators, junctions, curves and the client half are not carried."""
+authors = ["Rok (PedroRok, upstream)", "Horizon native mod contributors"]
+# The SDK package (mod API 0.2): one flat .hmod carrying the code in src/ and the
+# tubes' own blockstates, models, textures, recipes, loot tables and lang in
+# assets/ and data/. The id is the resource namespace and the only identity.
+api = "0.2"
+# "both" is the installation side, not the hook's: an integrated server belongs to the client
+# installation, so a single-player world or a LAN host needs both. A dedicated server is "server".
+side = "both"
+# Required by the manifest schema. This port declares its two blocks in data/
+# (`data/create_hypertube/horizon/block/`); the field is the permission to add registry
+# entries, and the shared manifest's one allowed value.
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"

@@ -1,0 +1,6 @@
+{
+  "model": {
+    "model": "create_hypertube:item/hypertube_entrance",
+    "type": "minecraft:model"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "collision_shapes": {
+    "default": []
+  },
+  "default_state": {
+    "facing": "north",
+    "open": "false"
+  },
+  "item": true,
+  "properties": {
+    "explosion_resistance": 10.0,
+    "hardness": 1.0,
+    "occludes": false,
+    "requires_tool": false,
+    "sounds": "minecraft:iron_block"
+  },
+  "shapes": {
+    "default": [
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    ]
+  },
+  "state_properties": {
+    "facing": {
+      "type": "enum",
+      "values": [
+        "north",
+        "east",
+        "south",
+        "west",
+        "up",
+        "down"
+      ]
+    },
+    "open": {
+      "type": "boolean"
+    }
+  },
+  "template": "minecraft:stone"
+}
