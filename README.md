@@ -1,10 +1,19 @@
-# Create: Hypertube for Horizon
+# Create: Hypertubes — a Horizon port
 
-Ride through glass tubes between two entrances. This is a Rust port of
-[Create: Hypertube](https://github.com/PedroRok/CreateHypertubes) (Apache-2.0)
-for [Horizon](https://github.com/horizon-rust/horizon), Minecraft 26.3.
+**Create: Hypertubes** is a Minecraft mod. Travel around the world with tubes!. This repository is a **port of it to [Horizon](https://github.com/horizon-rust/horizon)**, the Rust engine for Minecraft Java 26.3. It carries the complete source of the port plus the content files it ships, and installs as a single `.hmod` package.
 
-## What this slice does
+Upstream: [PedroRok/CreateHypertubes](https://github.com/PedroRok/CreateHypertubes) — licence **Apache-2.0**.
+
+| | |
+|---|---|
+| Upstream mod | Create: Hypertubes ([source](https://github.com/PedroRok/CreateHypertubes)) |
+| Ported to | Horizon 0b14f8a, Minecraft Java 26.3, mod API `0.2` |
+| Package | `create_hypertube.hmod` (install it with the Horizon launcher) |
+| Licence | **Apache-2.0** — the upstream mod's licence; see [Licence and credit](#licence-and-credit) |
+
+## What this port implements
+
+### What this slice does
 
 - **Hypertube** — place a line of tubes; they join along one axis and draw as
   glass where they connect.
@@ -18,48 +27,47 @@ for [Horizon](https://github.com/horizon-rust/horizon), Minecraft 26.3.
 Both blocks are walk-through, craftable (copper, glass, iron, a hopper), and in
 the creative menu under *Create: Hypertube*.
 
-## What it does not do yet
+## Not yet ported
 
-- **No kinetic power.** Create's rotation network is not linkable, so an
-  entrance always runs at its minimum powered speed and **accelerators are not
-  ported**.
-- **No curves, junctions or splitters** — a run is a straight line along one
-  axis; a corner ends the ride.
-- **No client half**: no detached camera, swim pose, suction particles or sound,
-  and no tube renderer for curves.
-- **Players only** — villagers, fish and packages do not travel.
+- **Kinetic power.** Create's rotation network decides whether an entrance is
+- **Accelerators, junctions, the funnel and the smart-tube attachments.**
+- **Curves and turns.** Upstream joins tubes with bezier connections
+- **The client half.** No detached camera, swim pose, suction particles or
+- **Non-player travellers.** Only server players ride (villagers, fish and
+- **Tube collision.** Upstream gives a tube a thin solid box and an empty one
+- **Config, goggles tooltips, the `locked`/`has_block_in_front`/`waterlogged`/
+- **No in-game run at `0b14f8a`** (the launcher/game build is absent). Every other claim here is
 
-It is also **not yet built into a game**: the launcher that compiles a native
-package is not installed on this machine, so the in-game scenario in
-`tools/e2e.sh` was last run against the retired `.hnmod` bundle (0.1.0).
+## Installing
 
-The full list, with the reasons, is in [`notes.md`](notes.md); the upstream
-behaviour it was built from is in [`FINDINGS.md`](FINDINGS.md).
+1. Install the [Horizon launcher](https://github.com/horizon-rust/horizon/releases) (0.2.70 or newer).
+2. Add `create_hypertube.hmod` to the instance's mods.
+3. The package is pinned to a specific Horizon build; the launcher checks that pin.
 
-## Install
+## Licence and credit
 
-One file: `create_hypertube.hmod`. It is the flat SDK package — the blocks, the
-models, the textures, the recipes, the loot tables and the code all travel
-inside it.
+Create: Hypertubes was created by its upstream authors; the code, models and assets in the original mod
+remain theirs and are used here under **Apache-2.0**. The Rust in this repository is a clean-room
+rewrite for Horizon, not a translation of the original source.
 
-## Build it yourself
+- `LICENSE` — the upstream licence text.
+- `LICENSE-NOTICE.md` — what this port carries and where it came from.
+- The upstream project: https://github.com/PedroRok/CreateHypertubes
 
-The package is built by the SDK's own tool, which fetches the pinned SDK into
-`.horizon/sdk/` on first use:
+## Technical details
 
-```sh
-cargo test                        # the pure travel rules and the glue's tests
-cargo horizon-mod build           # -> target/horizon-mod/create_hypertube.hmod
-cargo horizon-mod check create_hypertube.hmod
-cargo horizon-mod fits create_hypertube.hmod --build nightly
+```
+horizon-mod.toml   package manifest (id, version, api, [native] pin)
+Cargo.toml         the crate; depends on `horizon-mod-api` from the fetched SDK
+src/               lib.rs (the one `impl Hooks`), runtime.rs (pure logic + tests), glue
+assets/ data/      the content the package ships
+tools/             content generators and the e2e scenario
 ```
 
-Building a **game** that carries it is the launcher's job
-(`horizon-launcher native-build . --instance <instance> --trust-native-code`),
-not cargo's. The in-game checks are in [`VALIDATION.md`](VALIDATION.md).
+- Build: `cargo horizon-mod build` (packages; it does not compile against the game).
+- Test: `cargo test`, `cargo clippy --all-targets -- -D warnings`.
+- In-game: `ports/tools/launcher-game.sh run create_hypertube` in the campaign tree, or install the
+  `.hmod` and play; the harness scenario is `tools/e2e.sh`.
 
-## Licence
-
-The port's code and the carried assets are Apache-2.0, as upstream's are: see
-[`LICENSE`](LICENSE) and [`LICENSE-NOTICE.md`](LICENSE-NOTICE.md). The original
-art and audio belong to their author, "Rok".
+This repository is generated from the campaign's port at `ports/create_hypertube/`; the port's own
+`notes.md` is the full record (decisions, traps, evidence).
