@@ -114,6 +114,10 @@ Left as gaps (recorded in `notes.md`):
   attachments (scanner, redstone detector), `tube_path`, `coghweel_hole`;
 * **the client half** — detached camera, swim pose, suction particles and
   sound, the bezier tube renderer, escape keybind;
-* **non-player travellers** (villagers, fish, `create:package`);
+* ~~**non-player travellers** (villagers, fish, `create:package`)~~ — **carried in
+  slice 2** (2026-11-21) under the jar's default `BLACKLIST` mode: every living
+  kind except `minecraft:wither` and `minecraft:ender_dragon`. `create:package`
+  cannot ride because Create itself is not carried, and the
+  `traveller_entities` tag / other list modes / config file stay gaps;
 * **tube collision along curves** (`tubeCollision` config);
 * **config files** — defaults are constants.

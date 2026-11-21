@@ -2,9 +2,10 @@
 
 > **History: the retired `.hnmod` bundle (0.1.0).** Everything below was run at pin
 > `1d63e0a5` from the staging ladder (`tools/horizon.py`) and the embedded-content bundle, none of
-> which exists any more. The current state — its ladder, package size/hash and the gap that no game
-> was built at `0b14f8a` — is in [`notes.md`](notes.md) `## Migration verification (SDK 0b14f8a)`;
-> the in-game transcripts below remain this port's only in-game evidence.
+> which exists any more. The current state is [`notes.md`](notes.md): `## Migration verification
+> (SDK 0b14f8a)` for the flat package and `## Slice 2` for the traveller family at `0a875da`
+> (its own ladder, package hash and in-game transcripts are repeated here as well). The in-game
+> transcripts below remain the port's 0.1.0 evidence.
 
 Pin **`1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9`** (mixins
 `5a64af938ec86b00d53d16a408aabc0038fb3e57`, schema 6), Minecraft 26.3.
@@ -115,3 +116,50 @@ those legs stay local (`BUILD_LOCAL=1`).
 |---|---:|---|---:|
 | `content/create_hypertube.hmod` | 15,628 B | `351ee2d5ec52ea95c82f328cc1f9d49d03ef08a14d51a555e6ce223e00fac9d7` | 27 |
 | `create_hypertube.hnmod` | 24,877 B | `f015aac32729c28c5bffdcade5026d6bc24dc3be23ce19eb2ed3eb90d3f7a4bc` | 9 |
+
+---
+
+# Slice 2 validation (`0a875da`, 2026-11-21) — every living traveller
+
+Pin **Horizon `0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** + mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, Minecraft 26.3, SDK `0.2`, package `0.2.1`.
+Every step ran through `ports/tools/build-slot.sh` (`BUILD_LOCAL=1`: the SDK stages in the port, so
+the remote runner has no directory to sync; the launcher leg compiles the mod itself).
+`.horizon/sdk` was deleted before the first build so the pin's SDK was fetched
+(`SDK 0a875da (build 0a875da91d…) in ./.horizon/sdk`).
+
+## Ladder
+
+| Step | Command | Result | Log |
+|---|---|---|---|
+| unit (red) | `cargo test` with the new rules' tests and stubs | **5 failed, 19 passed** — `minecraft:wither must stay` (runtime.rs:657), `sneak refuses the pull` (:691), `sweep_due(ENTITY_SWEEP_TICKS)` (:683), `[0,0,0] != [199,101,0]` (:700), `!may_travel(player, spectator)` (:669) | `evidence/create_hypertube/slice2-runtime-tests-red.log` |
+| unit (green) | `cargo test` | **24 passed; 0 failed** | `evidence/create_hypertube/sdk-test.log` |
+| lints | `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` | `FMT_EXIT:0`, `CLIPPY_EXIT:0`, 0 warnings | `evidence/create_hypertube/sdk-clippy.log` |
+| package × 2 | `rm -f Cargo.lock && cargo horizon-mod build` twice | 39,579 B, SHA-256 `f824be2d…1699`, **`cmp`-identical** both runs | session; `evidence/create_hypertube/sdk-check.log` |
+| registry check | `cargo horizon-mod check create_hypertube.hmod` | `create_hypertube 0.2.1 (native-mod, format native-1/0a875da9…/e59da909…, for 26.3)`, `CHECK_EXIT:0` | `evidence/create_hypertube/sdk-check.log` |
+| fits, the pin | `cargo horizon-mod fits … --build 0a875da` | `0a875da  made for`, exit 0 | `evidence/create_hypertube/sdk-fits.log` |
+| fits, another build | `cargo horizon-mod fits … --build 0b14f8a` | `0b14f8a  fits`, exit 0 (so the pin run is not a tautology) | same |
+| package gate | `verify-sdk-package.py create_hypertube` | **1/1** | session |
+| package vs tree | `cmp` of `src/lib.rs`, `src/runtime.rs`, `horizon-mod.toml`, `Cargo.toml` from inside the `.hmod` | all byte-identical | session |
+| skill gate | `check-skills.py --notes ports/create_hypertube --strict` | `SKILLS GATE: PASS` | session |
+
+## In game (launcher-built)
+
+`ports/tools/launcher-game.sh build create_hypertube` → `Compiling create_hypertube (1 of 1)`,
+`native-0a875da-…`, exported pair used for `GAME`/`CTL`. Launch is `--offscreen` (legs L/M open a
+crafting table screen; a headless client never opens one).
+
+| Run | Result | Log |
+|---|---|---|
+| default (A–M, includes the villager, the item/wither controls, both recipes, both loot tables and the sneak differential) | **PASS, `EXIT:0`** | `evidence/create_hypertube-e2e/e2e-slice2-default.log` |
+| `SELFTEST=1` (A's and H's arrival flipped) | **FAIL as designed, `EXIT:1`** | `…/e2e-slice2-selftest.log` |
+| `SELFTEST=2` (only H's arrival flipped — the new leg) | **FAIL as designed, `EXIT:1`** | `…/e2e-slice2-selftest-entity.log` |
+| `NEGATIVE=1` (leg I inverted: the item must move) | **FAIL as designed, `EXIT:1`** | `…/e2e-slice2-negative.log` |
+| `check-e2e-logs.py create_hypertube-e2e --strict` | `logs=4 ok=4 missing-exit=0 bad-exit=0` | session |
+
+Measured: player 0.5 blocks/tick → x = 223.0; villager 199.5 → 223.0 on the same path; item and
+wither unmoved over 40 ticks; 16 tubes from `BGB/GG/BGB` with copper 16→12 and glass 16→12; 1
+entrance with tube/iron/hopper each 1→0; nine copper crafts nothing; both blocks drop one of
+themselves in survival; a sneaking player stays at 199.5 and rides once shift is released.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices

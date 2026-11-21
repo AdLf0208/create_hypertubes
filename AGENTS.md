@@ -25,9 +25,10 @@ ports/tools/build-slot.sh run --job sdk-cht --port ports/create_hypertube --step
   `build` packs the `.hmod`; it does **not** compile against the game — that is
   `horizon-launcher native-build . --instance <instance> --trust-native-code`, which is not
   installed here.
-- **`src/runtime.rs` is byte-identical to the retired bundle's `runtime.rs` and must stay so**
-  (`cmp` it): the travel rules live there, `src/lib.rs` only converts SDK types to theirs. New rule
-  → a test in `runtime.rs`; new glue → a private fn and a test in `lib.rs`.
+- **`src/runtime.rs` holds the pure rules and their tests** (slice 1 carried the retired bundle's
+  file byte-identically; slice 2 appended the traveller rules below it, so the retired copy in
+  `_shared/evidence/create_hypertube/retired-hnmod-0.1.0/` is now the historical one). New rule →
+  a test in `runtime.rs`; new glue → a private fn and a test in `lib.rs`.
 - **The travel is the `server_tick` hook, not a Part** (a run belongs to no single block); the two
   blocks' shapes are `BlockPart`s (`state_for_placement`, `update_shape`). The movement is
   `EntityRef::teleport_to(host, pos, None)` — the handle methods are the mod-facing host API, not

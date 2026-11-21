@@ -1,4 +1,4 @@
-# Create: Hypertube — port notes (slice 1: tube + entrance + travel)
+# Create: Hypertube — port notes (slices 1–2: tube + entrance + travel, then every living traveller)
 
 > **`## Migration to the SDK format`** and **`## Migration verification (SDK 0b14f8a)`** at the
 > end of this file are the current state. Everything above them is the history of the retired
@@ -54,9 +54,12 @@ Create's kinetic power, which is what decides an entrance's speed, as a gap.
 - **The client half.** No detached camera, swim pose, suction particles or
   sound, no bezier tube renderer, no escape keybind: the ride is a per-tick
   server teleport and the client simply follows.
-- **Non-player travellers.** Only server players ride (villagers, fish and
+- **Non-player travellers.** ~~Only server players ride (villagers, fish and
   `create:package` do not), and `traveller_entities` / the entity
-  whitelist-blacklist config is not carried.
+  whitelist-blacklist config is not carried.~~ **Carried in slice 2** (2026-11-21): every living
+  entity rides except the jar's two default blacklist kinds. The `traveller_entities` tag and the
+  other three `entityListMode` values are still not carried — only the default `BLACKLIST` mode,
+  whose two names are constants. See `## Slice 2` at the end of this file.
 - **Tube collision.** Upstream gives a tube a thin solid box and an empty one
   only to an entity marked as travelling; a content block's collision cannot
   depend on the entity, so this port's tubes have **no collision** for anyone
@@ -387,7 +390,7 @@ Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-de
 ## Changelog for the resubmission
 
 > Supersedes **#785**, closed because Horizon retired `.hnmod` (#17992). Changes: the flat SDK
-> package with `api = "0.2"` and `[native]` pinned to `0b14f8a`/`e59da90`; the travel is the
+> package with `api = "0.2"` and `[native]` pinned to `0a875da`/`e59da90`; the travel is the
 > SDK's `server_tick` hook and moves the traveller with `EntityRef::teleport_to` instead of the
 > retired `native_teleport_player` helper (no dimension argument, same 0.5 blocks a tick and
 > 1.5-block exit); the two blocks' shapes are `BlockPart`s (`state_for_placement` on both,
@@ -395,3 +398,160 @@ Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-de
 > neighbours; the blocks, models, textures, recipes, loot tables, tags and lang ship **inside** the
 > package, so the embedded-content bundle is gone; `src/runtime.rs` and its 16 tests are
 > unchanged. Version 0.2.0.
+>
+> 0.2.1 adds slice 2: every **living** traveller rides, not only the server's players — the jar's
+> default `BLACKLIST` mode, which refuses only `minecraft:wither` and `minecraft:ender_dragon`; a
+> spectator and a traveller holding sneak are refused, as the jar refuses them. The ride table is
+> keyed by entity UUID, as `TravelManager`'s is.
+
+## Slice 2 — every living traveller (2026-11-21, pin `0a875da`)
+
+The gap this slice closes, quoted from `### Gaps` above:
+
+> **Non-player travellers.** Only server players ride (villagers, fish and `create:package` do
+> not), and `traveller_entities` / the entity whitelist-blacklist config is not carried.
+
+It fits the ledger's **`content` / `deep`** tier: the travel is already the server-hook half of a
+`deep` port, and this widens *who* it carries — no new machine, menu or renderer. Accelerators,
+junctions and the funnel were rejected for this slice because their upstream effect is read from
+Create's kinetic network (`getSpeed()`), which this port cannot link: carrying one would mean
+inventing a no-power speed. Curves need the bezier renderer and a corner model a content block
+cannot express. The client half is a renderer the content API cannot declare.
+
+### The rules, from the jar (upstream `c3b74f52`, 0.6.0)
+
+| Rule | Where | What the port does |
+|---|---|---|
+| Every entity travels except a blacklist | `config/ServerConfig.java` `entityListMode` default `BLACKLIST` | `BLACKLISTED_TRAVELLERS` = `minecraft:wither`, `minecraft:ender_dragon`; every other kind rides |
+| Only living entities are candidates | `parent/TravelInteractTubeBlockEntity.java:117` (`getEntitiesOfClass(LivingEntity.class, …)`) | `host.living(entity)` must resolve; a dropped item, arrow or orb is not a traveller |
+| A spectator never travels | `TravelManager.java:63` | `may_travel(kind, spectator, …)` |
+| Sneak refuses the pull | `HyperEntranceBlockEntity.tick` (`isShiftKeyDown()` and not already travelling) | `may_pull(now, last_finished, sneaking)` |
+| The ride table is keyed by entity UUID | `TravelManager.java:54` (`travelDataMap`) | `State.rides: BTreeMap<u128, Rider>` — player and villager in one table |
+| A too-short run refuses silently for a non-player | `TravelManager.java:82-88` | `plan()`'s `MIN_POINTS` check, unchanged |
+| The guard is 2 s, per traveller | `TravelManager.java:62-79` | `REENTRY_TICKS`, now per UUID for every kind |
+
+### How the port finds a traveller, and why that is a deviation
+
+The jar's entrance is a **block entity**, so the game ticks it and it queries its own 1.5-block
+box. A content block (`data/create_hypertube/horizon/block/*.json`) has **no block entity** at
+this pin, so the port must find the mouths itself. It does two things each server tick:
+
+1. the server's **players** are looked at every tick, exactly as before (six block reads each);
+2. on every `ENTITY_SWEEP_TICKS`-th tick (**10 ticks, 0.5 s**) the mod walks
+   `LevelRef::all_entities` for each level a player is in and looks at each living entity's six
+   neighbours.
+
+Deviation, recorded: **a non-player traveller is picked up within half a second rather than the
+same tick**. A per-tick walk of the level's entity list would be O(entities × 6) block reads every
+tick, which the jar never pays because its block entities tick themselves. The sweep keeps the
+identity (`all_entities` allocates one buffer and sorts once per call) off the per-tick path. The
+kind check costs one registry id `String` per living candidate per sweep: the blacklist rule is
+pure and tested on ids (`may_travel`), and 0.5 s is not a hot path.
+
+Two smaller, inherited deviations still apply to the new travellers: the entry test is the whole
+cell behind the mouth (upstream centres a 1.5-block box half a cell out of it), and every traveller
+in one mouth starts its own ride in the tick it is found (upstream's `getNearestEntity` takes one
+per tick). The re-entry guard is also broader than the jar's: it refuses every entrance for 40
+ticks, where the jar refuses only the block it left. All three are the slice-1 shape, now shared
+by mobs.
+
+Still not carried in this family: the `create_hypertube:traveller_entities` **tag**, the
+`WHITELIST` / `TAG_ONLY` / `TAG_WITH_BLACKLIST` modes and the `speedMultiplier` / entity-list
+**config** (the defaults are constants here). A `create:package` therefore cannot ride — Create is
+not carried — but with the default blacklist any other living kind can.
+
+### Coverage (the jar's families)
+
+| Family | State | Where it is proven |
+|---|---|---|
+| The two blocks: place, read back, state properties | `tested` | e2e F/G (entrance `facing`, tube axis + its neighbour); the mineable tags are what let M break them with a pickaxe |
+| The two blocks' **loot tables** | `tested` | e2e M: each broken in **survival** drops one of itself (the carried tables' `bonus_rolls` and `"rolls": 1.0` — two shapes `check_261_dialect.py` flags as unverified — are accepted by 26.3: the drops appeared) |
+| The two **recipes** (crafting table, shaped) | `tested` | e2e L, `tools/craft_check.py`: `BGB/GG/BGB` → **16** tubes with 4 copper + 4 glass consumed; tube/iron/hopper → **1** entrance with all three consumed; a nine-copper ring leaves the result empty |
+| Straight-run travel, speed, exit, wall, too-short run | `tested` | e2e A–E (player) |
+| Non-player travellers (living, blacklist, sneak, spectator) | `tested` | e2e H (villager rides), I (item not pulled), K (wither not pulled), J (sneak refused, standing rides); unit tests for the rules |
+| Kinetic power (speed from Create's network) | `not ported` | parent Create cannot be linked (`ARCHITECTURE.md` §3); the entrance rides at `travel_speed(16)` |
+| Accelerators, junctions, funnel, smart-tube attachments | `not ported` | their effect is kinetic; see above |
+| Curves/bezier connections and turns | `not ported` | needs the bezier renderer and a corner model |
+| Client half (camera, pose, particles, sounds, keybind) | `not ported` | a client renderer the content API cannot declare |
+| Tube collision (thin box; empty only for a traveller) | `not ported` | a content block's collision cannot depend on the entity |
+| The `traveller_entities` tag and the entity-list config | `not ported` | no config-file API carried; the default mode is the constants in `runtime.rs` |
+
+`python3 ports/tools/check_261_dialect.py create_hypertube.hmod` also flags the two loot tables'
+`bonus_rolls` / `"rolls": 1.0` (4 offenders). Per `HANDOVER.md` §9d those two shapes are **not** among
+the three game-confirmed-fatal ones, and leg M now measures them in game: both blocks drop their own
+item, so 26.3 accepts the tables as carried. The recipes are `ok` (bare ids, no tag/object form).
+
+### Red → green (verbatim)
+
+`src/runtime.rs` is no longer the retired bundle's file byte for byte: slice 2 appends the four
+traveller rules below the travel rules, each with its test (the retired 606-line copy is inside
+`_shared/evidence/create_hypertube/retired-hnmod-0.1.0/create_hypertube.hnmod`, 21,810 B).
+`src/lib.rs` still only converts SDK types to the runtime's.
+
+The five new rules were written as failing tests first, against stubs
+(`evidence/create_hypertube/slice2-runtime-tests-red.log`):
+
+```
+test runtime::tests::the_default_blacklist_lets_every_kind_but_two_travel ... FAILED
+test runtime::tests::a_spectator_never_travels ... FAILED
+test runtime::tests::the_entity_sweep_runs_every_ten_ticks ... FAILED
+test runtime::tests::a_sneaking_traveller_is_not_pulled ... FAILED
+test runtime::tests::an_entity_stands_in_the_cell_its_feet_are_in ... FAILED
+
+panicked at src/runtime.rs:657:13:
+minecraft:wither must stay
+...
+test result: FAILED. 19 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+Then the rules landed (`may_travel`, `may_pull`, `sweep_due`, `feet_cell`), then the glue
+(`Rider`, the UUID-keyed table, `advance_rides`, `pull_travellers`):
+
+```
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out   (evidence/sdk-test.log)
+```
+
+`cargo clippy --all-targets -- -D warnings` exit 0 with 0 warnings, `cargo fmt --check` clean
+(`evidence/sdk-clippy.log`).
+
+### In game (the launcher-built game at `0a875da`, launched `--offscreen` for the menu legs)
+
+`launcher-game.sh build create_hypertube` compiled `create_hypertube (1 of 1)` — a fresh build, not
+a reuse. Transcript: `ports/_shared/evidence/create_hypertube-e2e/e2e-slice2-default.log`.
+
+| Leg | Assertion | Measured |
+|---|---|---|
+| A–G | slice 1 unchanged: 0.5 blocks a tick, exit 1.5 past the far entrance, the two controls, the wall, both placed states | 0.5 over 10 samples; x = 223.0 at z = 0.5; controls unmoved; both states as declared |
+| H | a villager summoned in the mouth cell is pulled and rides the same run | 199.5 → 214.88 after 30 ticks → **223.0** at z = 6.5, y = 101.5 |
+| I | a dropped item in the same mouth cell is not a traveller | 199.5 → 199.5 after 40 ticks (unmoved) |
+| K | a wither in a mouth cell is refused by the default blacklist | 199.5 → 199.5 after 40 ticks (unmoved) |
+| L | both carried recipes craft in a table, and consume their ingredients | `BGB/GG/BGB` → 16 tubes, copper 16→12, glass 16→12; tube/iron/hopper → 1 entrance, each 1→0; nine copper → no result |
+| M | both blocks drop themselves when broken in survival | one tube and one entrance reached the inventory |
+| J | a player holding sneak is not pulled; the same player standing is | `keys held: ["ShiftLeft"]`; sneaking 199.5 for 30 ticks, then 214.38 after 30 more |
+
+Fail-capable runs: `SELFTEST=1` flips A's and H's arrival expectation and exits **1** with a
+`FAIL:` verdict; `SELFTEST=2` flips only H's, so the *new* leg is the one shown to fail, exit **1**;
+`NEGATIVE=1` inverts I (the item must move) and exits **1**. `check-e2e-logs.py
+create_hypertube-e2e --strict` → `logs=4 ok=4 missing-exit=0 bad-exit=0`.
+
+Three harness facts this leg cost, for the next port: a run must be built **far entrance first, then
+the tubes**, or a sweep can catch a half-built run (the near entrance alone is too short; the fill
+completes it in one command) — otherwise the ride ends at the bare-tube exit; a sneak test must press
+shift **before** stepping into the mouth, because a standing traveller is pulled on the very next
+tick; and an arrival read needs a margin of a few ticks (a fixed 12-tick wait after the sampling loop
+was one tick short of the 48-tick ride under `--offscreen`, three runs in).
+
+### Package (0.2.1)
+
+| | |
+|---|---|
+| `create_hypertube.hmod` | **39,579 B**, SHA-256 `f824be2d0de77f5d65e4b0db2c1c7d52e32efbd9ab2af174542eaf9f65591699`, **34 entries**, no `Cargo.lock` |
+| two consecutive builds (`rm -f Cargo.lock` before each) | `cmp`-identical, same sha |
+| `cargo horizon-mod check` | `create_hypertube 0.2.1 (native-mod, format native-1/0a875da9…/e59da909…, for 26.3)`, `CHECK_EXIT:0` (`evidence/sdk-check.log`) |
+| `fits --build 0a875da` | `0a875da  made for`, exit 0 (`evidence/sdk-fits.log`) |
+| `fits --build 0b14f8a` | `0b14f8a  fits`, exit 0 — a different nightly, so the pin run is not a tautology |
+| `uses.json` | names `handle:LevelRef::all_entities`, `EntityRef::kind`/`uuid`/`spectator`/`is_shift_key_down`/`teleport_to`, `LivingHost::living`, `hook:server_tick`, `part:entity` |
+| package vs tree | `src/lib.rs`, `src/runtime.rs`, `horizon-mod.toml`, `Cargo.toml` byte-identical inside the package (`cmp`) |
+| `verify-sdk-package.py create_hypertube` | **1/1** |
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices

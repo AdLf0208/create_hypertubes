@@ -2,7 +2,7 @@
 //!
 //! Upstream's `HyperEntranceBlock.getStateForPlacement` and `HypertubeBlock.getState` are
 //! [`BlockPart`] methods on the two carried blocks (`state_for_placement` and `update_shape`), and
-//! the travel is the [`Hooks::server_tick`] hook: a run spans many blocks and a player, so no
+//! the travel is the [`Hooks::server_tick`] hook: a run spans many blocks and a traveller, so no
 //! single block owns it and it is not a Part.
 //!
 //! The rules themselves live in [`runtime`], byte-identical to the retired bundle's `runtime.rs`
@@ -14,13 +14,14 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
 use mod_api::{
-    self, BlockKey, BlockPart, BlockPos, BlockState, Hooks, LevelHost, LevelRef, LevelTicksHost,
-    Registrar, RegistrationContext, ServerHost, ServerTickEvent, ServerTickPhase,
+    self, BlockKey, BlockPart, BlockPos, BlockState, EntityRef, Hooks, LevelHost, LevelRef,
+    LevelTicksHost, Registrar, RegistrationContext, ServerHost, ServerTickEvent, ServerTickPhase,
     StateForPlacementEvent, UpdateShapeEvent,
 };
 
 use crate::runtime::{
-    Cell, Dir, NEEDED_SPEED, Ride, World, may_enter, plan, starts_ride, travel_speed,
+    BLACKLISTED_TRAVELLERS, Cell, Dir, NEEDED_SPEED, REENTRY_TICKS, Ride, World, feet_cell,
+    may_pull, may_travel, plan, starts_ride, sweep_due, travel_speed,
 };
 
 /// The tube block's id.
@@ -77,11 +78,21 @@ fn cell_of(is_tube: bool, is_entrance: bool, facing: Option<&str>) -> Cell {
     }
 }
 
-/// What the port keeps between server ticks: the rides in progress, when each player's last ride
-/// ended (the re-entry guard), and its own tick count.
+/// One traveller's ride: the entity to move, and where along the run it is.
+struct Rider {
+    /// The traveller, whatever kind it is. A handle that stops resolving (the entity left,
+    /// died or changed level) makes the next teleport refuse, which ends the ride.
+    entity: EntityRef,
+    ride: Ride,
+}
+
+/// What the port keeps between server ticks: the rides in progress, when each traveller's
+/// last ride ended (the re-entry guard), and its own tick count.
 #[derive(Default)]
 struct State {
-    rides: BTreeMap<u128, Ride>,
+    /// Keyed by entity UUID, as the jar's `travelDataMap` is: a player and a villager ride
+    /// the same path through the same table.
+    rides: BTreeMap<u128, Rider>,
     finished: BTreeMap<u128, i64>,
     now: i64,
 }
@@ -112,9 +123,12 @@ impl Hooks for Mod {
         r.block_part(entrance, EntranceShape);
     }
 
-    /// At the end of a running server tick: move every ride one tick along, then let the entrances
-    /// pull in whoever stands in their mouth. The retired bundle did the same from this hook; it
-    /// reads blocks by the player's own level, because the level in place is not defined here.
+    /// At the end of a running server tick: move every ride one tick along, then let the
+    /// entrances pull in whoever stands in their mouth. The retired bundle did the same from
+    /// this hook and only knew players; the jar's rule is every living kind the default
+    /// blacklist allows, so the travellers are the server's players plus, on a sweep, the
+    /// level's other living entities (a run belongs to no single block here, so no Part can
+    /// be ticked instead).
     fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
         match event.phase {
             ServerTickPhase::ServerTickEnd {
@@ -128,47 +142,96 @@ impl Hooks for Mod {
         let Some(entrance) = host.block_key(ENTRANCE) else {
             return;
         };
-        let players = host.players().server_players();
         let mut state = self.state();
         state.now += 1;
         let now = state.now;
-        // A ride whose player left the server is dropped, not resumed.
-        state
-            .rides
-            .retain(|uuid, _| players.iter().any(|player| player.uuid() == *uuid));
-        for player in &players {
-            let uuid = player.uuid();
-            let entity = player.entity();
-            if let Some(mut ride) = state.rides.remove(&uuid) {
-                ride.advance();
-                let going = !ride.finished();
-                let at = ride.position();
-                let moved = entity.teleport_to(host, at, None);
-                if moved && going {
-                    state.rides.insert(uuid, ride);
-                } else {
-                    // Reaching the end, or a teleport the game refused: the ride is over either
-                    // way, and the entrance stays shut for two seconds.
-                    state.finished.insert(uuid, now);
+        advance_rides(host, &mut state, now);
+        // The guard only has to outlive its own ticks; a busy tube would otherwise keep one
+        // entry per traveller that ever rode.
+        state.finished.retain(|_, at| now - *at < REENTRY_TICKS);
+        pull_travellers(host, &mut state, tube, entrance);
+    }
+}
+
+/// Move every ride one tick along its path. A ride ends when the path is spent or the game
+/// refuses the teleport (a stale handle: the traveller left, died, or changed level).
+fn advance_rides(host: &mut dyn ServerHost, state: &mut State, now: i64) {
+    let mut ended: Vec<u128> = Vec::new();
+    for (uuid, rider) in state.rides.iter_mut() {
+        rider.ride.advance();
+        let going = !rider.ride.finished();
+        let at = rider.ride.position();
+        if !rider.entity.teleport_to(host, at, None) || !going {
+            ended.push(*uuid);
+        }
+    }
+    for uuid in ended {
+        state.rides.remove(&uuid);
+        state.finished.insert(uuid, now);
+    }
+}
+
+/// Start a ride for every traveller standing in an entrance's mouth: the server's players
+/// every tick, and — on a [`sweep_due`] tick — every other living entity in a player's
+/// level. A content block cannot carry a block entity at this pin, so the entrance cannot
+/// tick itself as the jar's does; the sweep is that tick, at a fixed cadence.
+fn pull_travellers(
+    host: &mut dyn ServerHost,
+    state: &mut State,
+    tube: BlockKey,
+    entrance: BlockKey,
+) {
+    let players = host.players().server_players();
+    let player_entities: Vec<EntityRef> = players.iter().map(|player| player.entity()).collect();
+    let mut candidates: Vec<(EntityRef, LevelRef)> = Vec::with_capacity(players.len());
+    for player in &players {
+        if let Some(level) = player.level(host) {
+            candidates.push((player.entity(), level));
+        }
+    }
+    if sweep_due(state.now) {
+        let mut levels: Vec<LevelRef> = Vec::new();
+        for (_, level) in &candidates {
+            if !levels.contains(level) {
+                levels.push(*level);
+            }
+        }
+        for level in levels {
+            let Some(entities) = level.all_entities(host) else {
+                continue;
+            };
+            for entity in entities {
+                // The players are already candidates, and only a living entity rides.
+                if player_entities.contains(&entity) || host.living(entity).is_none() {
+                    continue;
                 }
-                continue;
+                candidates.push((entity, level));
             }
-            if !may_enter(now, state.finished.get(&uuid).copied()) {
-                continue;
-            }
-            let Some(position) = entity.position(host) else {
-                continue;
-            };
-            let Some(level) = player.level(host) else {
-                continue;
-            };
-            let feet = [
-                position[0].floor() as i32,
-                position[1].floor() as i32,
-                position[2].floor() as i32,
-            ];
+        }
+    }
+    for (entity, level) in candidates {
+        let Some(uuid) = entity.uuid(host) else {
+            continue;
+        };
+        if state.rides.contains_key(&uuid) {
+            continue;
+        }
+        let kind = entity.kind(host).map_or(String::new(), |key| key.id(host));
+        let spectator = entity.spectator(host).unwrap_or(false);
+        if !may_travel(&kind, spectator, &BLACKLISTED_TRAVELLERS) {
+            continue;
+        }
+        let sneaking = entity.is_shift_key_down(host).unwrap_or(false);
+        if !may_pull(state.now, state.finished.get(&uuid).copied(), sneaking) {
+            continue;
+        }
+        let Some(position) = entity.position(host) else {
+            continue;
+        };
+        let feet = feet_cell(position);
+        let run = {
             let mut cells = Cells {
-                host,
+                host: &*host,
                 level,
                 tube,
                 entrance,
@@ -176,14 +239,18 @@ impl Hooks for Mod {
             let Some((mouth, facing)) = entrance_at(feet, &mut cells) else {
                 continue;
             };
-            let Some(run) = plan(mouth, facing, &mut cells) else {
-                continue;
-            };
-            state.rides.insert(
-                uuid,
-                Ride::start(position, &run, travel_speed(NEEDED_SPEED)),
-            );
-        }
+            plan(mouth, facing, &mut cells)
+        };
+        let Some(run) = run else {
+            continue;
+        };
+        state.rides.insert(
+            uuid,
+            Rider {
+                entity,
+                ride: Ride::start(position, &run, travel_speed(NEEDED_SPEED)),
+            },
+        );
     }
 }
 

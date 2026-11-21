@@ -19,7 +19,12 @@
 // * `parent/TravelInteractTubeBlockEntity.java:117-127` — the entity is pulled
 //   from the cell *behind* the mouth (`pos + opposite(FACING)`);
 // * `TravelManager.java:62-79,151-159` — a 2,000 ms re-entry guard after a
-//   travel ends.
+//   travel ends;
+// * `ServerConfig.java` — the default `entityListMode = BLACKLIST` with
+//   `minecraft:wither` and `minecraft:ender_dragon`, so every other living
+//   entity rides;
+// * `TravelManager.java:63` — a spectator never travels;
+// * `HyperEntranceBlockEntity.tick` — a traveller holding sneak is not pulled.
 
 /// The least kinetic speed that opens an entrance (`NEEDED_SPEED`); a slice
 /// with no kinetic network rides at `travel_speed(NEEDED_SPEED)`, 0.5 blocks a
@@ -41,6 +46,42 @@ pub const REENTRY_TICKS: i64 = 40;
 pub fn travel_speed(rpm: f32) -> f64 {
     let rpm = f64::from(if rpm.is_finite() { rpm } else { 0.0 }).max(0.0);
     0.4333 * (rpm / f64::from(NEEDED_SPEED)).min(1.0) + rpm / 240.0
+}
+
+/// The jar's default traveller list (`ServerConfig`, `entityListMode = BLACKLIST`): every
+/// living kind travels except these two.
+pub const BLACKLISTED_TRAVELLERS: [&str; 2] = ["minecraft:wither", "minecraft:ender_dragon"];
+
+/// Server ticks between two searches of a level's entity list for travellers that are not
+/// players.
+pub const ENTITY_SWEEP_TICKS: i64 = 10;
+
+/// Whether a living entity of `kind` may travel: the jar's default `BLACKLIST` mode refuses
+/// the two kinds it names and lets every other kind ride, and a spectator never rides
+/// (`ServerConfig.canEntityTravel`, `TravelManager`'s spectator check).
+pub fn may_travel(kind: &str, spectator: bool, blacklist: &[&str]) -> bool {
+    !spectator && !blacklist.contains(&kind)
+}
+
+/// Whether an entrance may pull a traveller this tick: past the re-entry guard and not
+/// holding sneak (`HyperEntranceBlockEntity`'s `isShiftKeyDown` refusal; its `LOCKED` state
+/// is not carried, so sneak always refuses).
+pub fn may_pull(now: i64, last_finished: Option<i64>, sneaking: bool) -> bool {
+    !sneaking && may_enter(now, last_finished)
+}
+
+/// Whether the entity sweep is due at tick `now`, which starts at 1.
+pub fn sweep_due(now: i64) -> bool {
+    now > 0 && now % ENTITY_SWEEP_TICKS == 0
+}
+
+/// The block cell an entity's feet position stands in (`Entity.blockPosition`).
+pub fn feet_cell(pos: [f64; 3]) -> [i32; 3] {
+    [
+        pos[0].floor() as i32,
+        pos[1].floor() as i32,
+        pos[2].floor() as i32,
+    ]
 }
 
 /// One of the six faces a tube runs along, named as a block state names it.
@@ -602,5 +643,73 @@ mod tests {
         assert_eq!(Dir::West.axis(), "east_west");
         assert_eq!(Dir::Up.axis(), "up_down");
         assert_eq!(Dir::Down.axis(), "up_down");
+    }
+
+    #[test]
+    fn the_default_blacklist_lets_every_kind_but_two_travel() {
+        for kind in [
+            "minecraft:player",
+            "minecraft:villager",
+            "minecraft:wandering_trader",
+            "minecraft:cow",
+            "minecraft:armor_stand",
+        ] {
+            assert!(
+                may_travel(kind, false, &BLACKLISTED_TRAVELLERS),
+                "{kind} must travel"
+            );
+        }
+        for kind in ["minecraft:wither", "minecraft:ender_dragon"] {
+            assert!(
+                !may_travel(kind, false, &BLACKLISTED_TRAVELLERS),
+                "{kind} must stay"
+            );
+        }
+        // A blacklist names exact registry ids: another namespace's `wither`, or a kind no
+        // list mentions, still travels.
+        assert!(may_travel("other:wither", false, &BLACKLISTED_TRAVELLERS));
+    }
+
+    #[test]
+    fn a_spectator_never_travels() {
+        assert!(!may_travel(
+            "minecraft:player",
+            true,
+            &BLACKLISTED_TRAVELLERS
+        ));
+        // The blacklist still refuses its two kinds whatever the mode says.
+        assert!(!may_travel(
+            "minecraft:ender_dragon",
+            true,
+            &BLACKLISTED_TRAVELLERS
+        ));
+    }
+
+    #[test]
+    fn the_entity_sweep_runs_every_ten_ticks() {
+        assert_eq!(ENTITY_SWEEP_TICKS, 10);
+        assert!(!sweep_due(0), "the tick counter starts at 1");
+        assert!(!sweep_due(ENTITY_SWEEP_TICKS - 1));
+        assert!(sweep_due(ENTITY_SWEEP_TICKS));
+        assert!(!sweep_due(ENTITY_SWEEP_TICKS + 1));
+        assert!(sweep_due(3 * ENTITY_SWEEP_TICKS));
+    }
+
+    #[test]
+    fn a_sneaking_traveller_is_not_pulled() {
+        assert!(may_pull(0, None, false));
+        assert!(!may_pull(0, None, true), "sneak refuses the pull");
+        // The re-entry guard still applies while standing.
+        assert!(!may_pull(REENTRY_TICKS - 1, Some(0), false));
+        assert!(may_pull(REENTRY_TICKS, Some(0), false));
+        assert!(!may_pull(REENTRY_TICKS, Some(0), true));
+    }
+
+    #[test]
+    fn an_entity_stands_in_the_cell_its_feet_are_in() {
+        assert_eq!(feet_cell([199.5, 101.0, 0.5]), [199, 101, 0]);
+        // Negative coordinates floor downwards, as `BlockPos.containing` does.
+        assert_eq!(feet_cell([-0.5, 64.2, -0.5]), [-1, 64, -1]);
+        assert_eq!(feet_cell([3.0, 5.99, 7.0]), [3, 5, 7]);
     }
 }
